@@ -512,12 +512,19 @@ async function ask(){
   const qt = tokens(q);
 
   // pedido de arquivo? ("manda o projeto...", "me envia a planilha...")
-  const pedeArquivo = /\b(manda|mande|envia|envie|me da|me dá|abre|abrir|baixar|preciso do|preciso da|cade|cadê|onde esta|onde está)\b/i.test(q);
+  const pedeArquivo = /\b(manda|mande|envia|envie|me da|me dá|abre|abrir|baixa|baixar|preciso do|preciso da|cade|cadê|onde esta|onde está)\b/i.test(q);
   const filesFound = await searchFiles(qt);
   if(filesFound.length && (pedeArquivo || filesFound.length === 1 && qt.length <= 4)){
     pushHist('user', q);
     pushHist('assistant', 'Achei: ' + filesFound.map(f => f.name).join(', '));
-    showFileCards(filesFound, filesFound.length > 1 ? 'achei estes arquivos' : 'achei na caderneta');
+    // ENTREGA DIRETA: pedido claro + 1 arquivo certeiro = baixa na hora
+    if(pedeArquivo && filesFound.length === 1){
+      downloadFile(filesFound[0]);
+      toast('📎 Te mandei o ' + filesFound[0].name);
+      showFileCards(filesFound, 'mandei! já está baixando ⬇');
+    } else {
+      showFileCards(filesFound, filesFound.length > 1 ? 'achei estes — qual você quer?' : 'achei na caderneta');
+    }
     return;
   }
 
