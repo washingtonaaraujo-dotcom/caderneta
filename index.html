@@ -643,11 +643,55 @@ async function studyPendings(){
   estudando = false;
 }
 
+/* ================= WhatsApp ================= */
+function limpaFone(t){
+  let d = t.replace(/\D/g, '');
+  if(d.length >= 10 && d.length <= 11 && !d.startsWith('55')) d = '55' + d;
+  return d;
+}
+async function getContacts(){ return (await kvGet('contacts')) || {}; }
+
 async function ask(){
   const q = $('q').value.trim();
   if(!q) return;
   $('q').value = '';
   addUserMsg(q);
+
+  // cadastrar contato: "o whatsapp do João é 11 99999-8888"
+  const mCad = q.match(/whats(?:app|zap)?\s+(?:d[oae]|de)\s*([\wÀ-ÿ]+)\s*(?:é|e|eh|:)?\s*([\d\s().+-]{8,})/i);
+  if(mCad){
+    const nome = mCad[1], num = limpaFone(mCad[2]);
+    const contacts = await getContacts();
+    contacts[nome.toLowerCase()] = num;
+    await kvSet('contacts', contacts);
+    await saveMemory(`O WhatsApp de ${nome} é ${num}`);
+    pushHist('user', q); pushHist('assistant', `Contato ${nome} salvo`);
+    addNote(`<span class="stamp">✎ contato salvo</span><p>📱 <b>${esc(nome)}</b> → ${esc(num)}</p><div class="src">Agora é só falar: "manda um whats pro ${esc(nome)} dizendo ..."</div>`);
+    return;
+  }
+
+  // abrir/mandar whatsapp: "abre o whatsapp", "manda whats pro João dizendo chego em 10"
+  if(/\bwhats(?:app|zap)?\b|\bzap\b/i.test(q) && /\b(abre|abrir|manda|mandar|envia|enviar|chama|chamar|liga)\b/i.test(q)){
+    const contacts = await getContacts();
+    const nome = Object.keys(contacts).find(n => norm(q).includes(norm(n)));
+    let msg = '';
+    const mMsg = q.match(/(?:dizendo|falando|avisando|escrito|mensagem|que diz|:)\s+(.+)$/i);
+    if(mMsg) msg = mMsg[1];
+    let url, destino;
+    if(nome){
+      destino = nome.charAt(0).toUpperCase() + nome.slice(1);
+      url = 'https://wa.me/' + contacts[nome] + (msg ? '?text=' + encodeURIComponent(msg) : '');
+    } else {
+      destino = null;
+      url = /Android|iPhone|Mobile/i.test(navigator.userAgent)
+        ? 'whatsapp://send' + (msg ? '?text=' + encodeURIComponent(msg) : '')
+        : 'https://web.whatsapp.com';
+    }
+    window.open(url, '_blank');
+    pushHist('user', q); pushHist('assistant', 'Abrindo WhatsApp');
+    addNote(`<span class="stamp">📱 WhatsApp</span><p>${destino ? 'Abrindo conversa com <b>' + esc(destino) + '</b>' : 'Abrindo o WhatsApp'}${msg ? ' com a mensagem pronta: <i>"' + esc(msg) + '"</i> — é só apertar enviar!' : '…'}</p>${destino ? '' : '<div class="src">Dica: salva contatos falando "o whatsapp do João é 11 99999-8888"</div>'}`);
+    return;
+  }
 
   // comando direto: "aprende que ..." / "lembra que ..." / "grava que ..."
   const cmd = q.match(/^(aprende|lembra|grava|anota)( que|:)?\s+(.+)/i);
