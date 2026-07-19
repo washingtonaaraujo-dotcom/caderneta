@@ -1,7 +1,7 @@
-/* Caderneta — service worker v3
-   Estratégia: network-first para o app (atualiza sozinho quando online),
-   cache como reserva (funciona offline). */
-const CACHE = 'caderneta-v3';
+/* Caderneta — service worker v4
+   network-first para o app (atualiza sozinho) + cache offline.
+   Não intercepta a API nem os downloads do modelo de IA local. */
+const CACHE = 'caderneta-v4';
 const APP_SHELL = [
   './',
   './index.html',
@@ -12,6 +12,8 @@ const APP_SHELL = [
   'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js',
   'https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;800&display=swap'
 ];
+// só faz cache próprio destes domínios de CDN (o modelo de IA usa o cache do próprio WebLLM)
+const CDN_OK = ['cdnjs.cloudflare.com', 'fonts.googleapis.com', 'fonts.gstatic.com', 'cdn.jsdelivr.net'];
 
 self.addEventListener('install', (e) => {
   e.waitUntil(
@@ -24,20 +26,22 @@ self.addEventListener('install', (e) => {
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k)))
+      Promise.all(keys.filter((k) => k !== CACHE && k.startsWith('caderneta-')).map((k) => caches.delete(k)))
     ).then(() => self.clients.claim())
   );
 });
 
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
-  if (url.hostname === 'api.anthropic.com') return; // API nunca passa pelo cache
   if (e.request.method !== 'GET') return;
+  if (url.hostname === 'api.anthropic.com') return;
 
-  const isAppFile = url.origin === self.location.origin;
+  const sameOrigin = url.origin === self.location.origin;
+  const cdn = CDN_OK.includes(url.hostname);
+  if (!sameOrigin && !cdn) return; // modelo de IA, hugging face etc.: navegador cuida
 
-  if (isAppFile) {
-    // NETWORK-FIRST: pega a versão mais nova; se offline, usa o cache
+  if (sameOrigin) {
+    // NETWORK-FIRST: sempre tenta a versão nova; offline usa o cache
     e.respondWith(
       fetch(e.request).then((resp) => {
         if (resp && resp.status === 200) {
@@ -51,7 +55,7 @@ self.addEventListener('fetch', (e) => {
       )
     );
   } else {
-    // CDN (pdf.js, fontes): cache-first, raramente mudam
+    // CDNs: cache-first (mudam raramente)
     e.respondWith(
       caches.match(e.request).then((cached) => {
         if (cached) return cached;

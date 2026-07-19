@@ -71,10 +71,10 @@
   /* ---------- Formulários ---------- */
   h2{font-size:13px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); margin:4px 0 12px}
   label{display:block; font-size:12px; color:var(--dim); margin:12px 0 5px; letter-spacing:.03em}
-  input[type=text], input[type=password], textarea{
+  input[type=text], input[type=password], textarea, select{
     width:100%; background:var(--panel2); border:1px solid var(--line); color:var(--ink);
     border-radius:10px; padding:11px 12px; font-family:var(--sans); font-size:15px; outline:none}
-  input:focus, textarea:focus{border-color:var(--accent)}
+  input:focus, textarea:focus, select:focus{border-color:var(--accent)}
   textarea{min-height:90px; resize:vertical}
   .btn{background:var(--accent); color:var(--accent-ink); border:none; border-radius:10px;
     padding:12px 18px; font-family:var(--sans); font-weight:800; font-size:14px; letter-spacing:.02em; width:100%; margin-top:14px}
@@ -183,6 +183,23 @@
       <input type="password" id="apiKey" placeholder="sk-ant-...">
       <p class="hint">A chave fica salva <b>somente neste aparelho</b>. Sem chave e sem internet, o app continua funcionando 100% offline com a busca local.</p>
       <button class="btn ghost" id="btnSaveKey">Salvar ajustes</button>
+
+      <h2 style="margin-top:26px">IA offline (experimental)</h2>
+      <div class="toggle">
+        <div>
+          <div style="font-weight:700">Usar IA no aparelho</div>
+          <div class="hint" style="margin-top:2px">Baixa um modelo de IA que roda no próprio celular/PC, sem internet. Menos esperto que o modo online, mas funciona no meio do mato. 🌵</div>
+        </div>
+        <label class="switch"><input type="checkbox" id="localToggle"><span></span></label>
+      </div>
+      <label>Tamanho do modelo</label>
+      <select id="localModel">
+        <option value="Qwen2.5-0.5B-Instruct-q4f16_1-MLC">Leve — ~400 MB (celular)</option>
+        <option value="Llama-3.2-1B-Instruct-q4f16_1-MLC">Médio — ~800 MB (celular bom / PC)</option>
+        <option value="Qwen2.5-1.5B-Instruct-q4f16_1-MLC">Melhor — ~1 GB (PC)</option>
+      </select>
+      <button class="btn" id="btnDownloadLocal">⬇ Baixar IA offline</button>
+      <p class="hint" id="localStatus">Requer Chrome atualizado com WebGPU. O download é feito uma vez e fica salvo no aparelho.</p>
 
       <h2 style="margin-top:26px">Backup</h2>
       <button class="btn ghost" id="btnClearChat">Limpar conversa (mantém o aprendizado)</button>
@@ -370,6 +387,19 @@ async function ask(){
 
   // 1) respostas ensinadas
   const qas = await getAll('qa');
+
+  // 1a) correspondência exata (pega cumprimentos curtos: oi, e aí, bom dia)
+  const nq = norm(q).replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim();
+  const exact = qas.find(item =>
+    norm(item.q).replace(/[^a-z0-9 ]/g,' ').replace(/\s+/g,' ').trim() === nq);
+  if(exact){
+    pushHist('user', q);
+    pushHist('assistant', exact.a);
+    addNote(`<span class="stamp">✎ ensinado por você</span><p>${esc(exact.a)}</p>`);
+    return;
+  }
+
+  // 1b) correspondência por similaridade
   let best = null, bs = 0;
   qas.forEach(item => { const s = scoreQA(qt, item); if(s > bs){ bs = s; best = item; } });
 
@@ -389,9 +419,16 @@ async function ask(){
     return;
   }
 
-  // MODO IA: responde tudo, lembra da conversa e aprende sozinha
+  // MODO IA ONLINE: responde tudo, lembra da conversa e aprende sozinha
   if(aiOn){
     await answerWithAI();
+    return;
+  }
+
+  // MODO IA OFFLINE (modelo local no aparelho)
+  const localOn = await kvGet('localAIOn');
+  if(localOn && 'gpu' in navigator){
+    await answerWithLocalAI();
     return;
   }
 
@@ -475,6 +512,84 @@ async function answerWithAI(){
   }
   scrollChat();
 }
+
+/* ================= IA OFFLINE (WebLLM — roda no aparelho) ================= */
+let localEngine = null, localEngineModel = null, localLoading = false;
+
+async function loadLocalEngine(onProgress){
+  const model = (await kvGet('localModel')) || 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC';
+  if(localEngine && localEngineModel === model) return localEngine;
+  if(localLoading) throw new Error('carregamento já em andamento');
+  if(!('gpu' in navigator)) throw new Error('este navegador não tem WebGPU — use o Chrome atualizado');
+  localLoading = true;
+  try{
+    const webllm = await import('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm/+esm');
+    localEngine = await webllm.CreateMLCEngine(model, {
+      initProgressCallback: (p) => { if(onProgress) onProgress(p.text || `${Math.round((p.progress||0)*100)}%`); }
+    });
+    localEngineModel = model;
+    return localEngine;
+  } finally { localLoading = false; }
+}
+
+async function answerWithLocalAI(){
+  const note = addNote(`<span class="stamp ia">🧠 IA offline</span><p class="thinking">preparando o cérebro local…</p>`);
+  const p = note.querySelector('p');
+  try{
+    const engine = await loadLocalEngine((txt) => { p.textContent = txt; scrollChat(); });
+    p.textContent = 'pensando…';
+
+    const temCtx = lastContext.hits.length > 0;
+    const ctx = lastContext.hits.map((h,i) => `[${h.c.docName}] ${h.c.text}`).join('\n');
+    let sys = 'Você é a Caderneta, assistente pessoal do Washington, técnico de qualidade em obras no Brasil. Responda SEMPRE em português do Brasil, curto e direto.';
+    if(temCtx) sys += ' Use estas anotações do usuário quando forem relevantes:\n' + ctx.slice(0, 2500);
+
+    const msgs = [{ role:'system', content: sys }];
+    chatHist.slice(-6).forEach(m => msgs.push({ role: m.role, content: m.content }));
+    msgs.push({ role:'user', content: lastContext.q });
+
+    const stream = await engine.chat.completions.create({
+      messages: msgs, temperature: 0.7, max_tokens: 400, stream: true
+    });
+    let text = '';
+    for await (const chunk of stream){
+      text += chunk.choices?.[0]?.delta?.content || '';
+      p.textContent = text; scrollChat();
+    }
+    pushHist('user', lastContext.q);
+    pushHist('assistant', text);
+    note.innerHTML = `<span class="stamp ia">🧠 IA offline</span><p>${esc(text)}</p>`;
+  }catch(err){
+    let extra = '';
+    if(lastContext.hits.length){
+      extra = `<div class="src" style="margin-top:10px">Achei isto nas suas anotações:</div>`;
+      lastContext.hits.forEach(h => {
+        extra += `<p class="trecho">${esc(h.c.text)}</p><div class="src">${esc(h.c.docName)}</div>`;
+      });
+    }
+    note.innerHTML = `<span class="stamp doc">IA offline indisponível</span><p>${esc(err.message)}. Baixe o modelo nos <b>Ajustes</b> (precisa de internet uma vez) ou use a busca local.</p>${extra}`;
+  }
+  scrollChat();
+}
+
+$('btnDownloadLocal').addEventListener('click', async () => {
+  const st = $('localStatus');
+  await kvSet('localModel', $('localModel').value);
+  await kvSet('localAIOn', true);
+  $('localToggle').checked = true;
+  st.textContent = 'Baixando modelo… (só na primeira vez, deixa a tela aberta)';
+  try{
+    await loadLocalEngine((txt) => { st.textContent = txt; });
+    st.textContent = '✅ IA offline pronta! Agora ela responde até sem internet.';
+    toast('IA offline instalada ✓');
+  }catch(err){
+    st.textContent = '❌ ' + err.message;
+  }
+});
+$('localToggle').addEventListener('change', async (e) => {
+  await kvSet('localAIOn', e.target.checked);
+  if(e.target.checked) await kvSet('localModel', $('localModel').value);
+});
 
 /* ================= Ensinar ================= */
 async function renderQA(){
@@ -651,6 +766,9 @@ if('serviceWorker' in navigator){
   await loadHist();
   $('apiKey').value = (await kvGet('apiKey')) || '';
   $('aiToggle').checked = !!(await kvGet('useAI'));
+  $('localToggle').checked = !!(await kvGet('localAIOn'));
+  const lm = await kvGet('localModel');
+  if(lm) $('localModel').value = lm;
 })();
 </script>
 </body>
