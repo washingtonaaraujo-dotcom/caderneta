@@ -587,6 +587,62 @@ function showFileCards(files, titulo){
   scrollChat();
 }
 
+/* ================= Caderno de dúvidas (ela estuda sozinha) ================= */
+async function addPending(q){
+  if(q.length < 10) return;
+  const list = (await kvGet('pendings')) || [];
+  const nq = norm(q);
+  if(list.some(p => norm(p.q) === nq)) return; // já anotada
+  list.push({ q, date: Date.now() });
+  await kvSet('pendings', list.slice(-20)); // guarda no máximo 20
+}
+
+let estudando = false;
+async function studyPendings(){
+  if(estudando) return;
+  const key = await kvGet('apiKey');
+  const useAI = await kvGet('useAI');
+  if(!key || !useAI) return;
+  let list = (await kvGet('pendings')) || [];
+  if(!list.length) return;
+  estudando = true;
+  const lote = list.slice(0, 3); // estuda até 3 por vez pra não gastar demais
+  let aprendidas = 0;
+  for(const p of lote){
+    try{
+      const resp = await fetch('https://api.anthropic.com/v1/messages', {
+        method:'POST',
+        headers:{
+          'content-type':'application/json',
+          'x-api-key': key,
+          'anthropic-version':'2023-06-01',
+          'anthropic-dangerous-direct-browser-access':'true'
+        },
+        body: JSON.stringify({
+          model:'claude-sonnet-4-6',
+          max_tokens: 700,
+          system:'Você é a Caderneta estudando sozinha para responder offline depois. Responda a pergunta em português do Brasil de forma completa mas enxuta (um parágrafo ou dois), factual e autocontida, repetindo os termos-chave da pergunta no texto. Pesquise na internet se precisar de informação atual. Responda APENAS com o texto da resposta, sem JSON, sem preâmbulo.',
+          messages:[{ role:'user', content: p.q }],
+          tools:[{ type:'web_search_20250305', name:'web_search' }]
+        })
+      });
+      const data = await resp.json();
+      if(data.error) throw new Error(data.error.message);
+      const texto = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+      if(texto){
+        const partes = chunkText('Pergunta: ' + p.q + ' — Resposta: ' + texto);
+        for(const parte of partes) await saveMemory(parte);
+        aprendidas++;
+        addNote(`<span class="stamp">📚 estudei sozinha</span><p><b>${esc(p.q)}</b></p><p>${esc(texto.slice(0, 400))}${texto.length > 400 ? '…' : ''}</p><div class="src">salvo — agora sei responder isso até offline</div>`);
+      }
+      list = list.filter(x => x.q !== p.q);
+      await kvSet('pendings', list);
+    }catch(e){ break; } // sem conexão/crédito: tenta na próxima
+  }
+  if(aprendidas) toast(`📚 Estudei ${aprendidas} dúvida${aprendidas > 1 ? 's' : ''} pendente${aprendidas > 1 ? 's' : ''}!`);
+  estudando = false;
+}
+
 async function ask(){
   const q = $('q').value.trim();
   if(!q) return;
@@ -694,7 +750,8 @@ async function ask(){
     });
     addNote(html);
   } else {
-    addNote(`<span class="stamp doc">sem registro</span><p>Estou offline e ainda não sei responder isso. Me ensine na aba <b>Ensinar</b>, escreva "aprende que ..." ou alimente um PDF na <b>Biblioteca</b>.</p>`);
+    await addPending(q);
+    addNote(`<span class="stamp doc">sem registro</span><p>Estou offline e ainda não sei responder isso. <b>Anotei essa dúvida no meu caderno</b> 📚 — quando tiver internet, eu mesma pesquiso, aprendo e te aviso. Ou me ensine agora com "aprende que ...".</p>`);
   }
 }
 $('btnAsk').addEventListener('click', ask);
@@ -1037,7 +1094,7 @@ function netStatus(){
   $('netdot').classList.toggle('on', on);
   $('netlabel').textContent = on ? 'online' : 'offline';
 }
-window.addEventListener('online', netStatus);
+window.addEventListener('online', () => { netStatus(); setTimeout(studyPendings, 2000); });
 window.addEventListener('offline', netStatus);
 
 if('serviceWorker' in navigator){
@@ -1065,6 +1122,9 @@ if('serviceWorker' in navigator){
         .catch(() => {});
     }, 1200);
   }
+
+  // estuda as dúvidas anotadas quando tiver internet
+  setTimeout(studyPendings, 3000);
 })();
 </script>
 </body>
