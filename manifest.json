@@ -1,0 +1,14 @@
+{
+  "name": "Caderneta — assistente que aprende",
+  "short_name": "Caderneta",
+  "description": "Assistente pessoal offline: ensine respostas, alimente com PDFs e pergunte.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#0E2A47",
+  "theme_color": "#0E2A47",
+  "icons": [
+    { "src": "icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "icon-512.png", "sizes": "512x512", "type": "image/png" }
+  ]
+}

@@ -1,0 +1,28 @@
+CADERNETA — assistente que aprende (PWA offline)
+=================================================
+
+COMO COLOCAR NO AR (mesmo esquema do seu PWA de pontos GPS):
+
+1. Crie um repositório no GitHub (ex.: caderneta)
+2. Suba estes 5 arquivos na raiz:
+   index.html, sw.js, manifest.json, icon-192.png, icon-512.png
+3. Settings > Pages > Branch: main > Save
+4. Abra o link no Chrome do celular
+5. Menu ⋮ > "Adicionar à tela inicial" (instala como app)
+6. Abra o app UMA VEZ com internet (pra ele guardar tudo no cache)
+   — depois disso funciona 100% offline.
+
+COMO USAR:
+
+• ENSINAR: cadastre "quando eu perguntar X → responda Y"
+• BIBLIOTECA: envie PDFs leves ou TXT (livros, normas, apostilas).
+  O texto é extraído e indexado no próprio celular.
+  Obs.: PDF escaneado (só imagem) não tem texto pra extrair.
+• PERGUNTAR: ele responde com o que você ensinou + trechos
+  encontrados nos seus documentos. Tudo offline.
+• AJUSTES (opcional): com internet + sua chave da API Anthropic,
+  aparece o botão "Redigir resposta com IA" — ele monta uma
+  resposta bem escrita usando os trechos dos seus PDFs.
+• BACKUP: exporta/importa tudo em .json (bom pra trocar de celular).
+
+Os dados ficam no IndexedDB do navegador — só no seu aparelho.
