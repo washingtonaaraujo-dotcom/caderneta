@@ -336,7 +336,7 @@ async function loadHist(){
   // reexibe a conversa anterior na tela
   chatHist.forEach(m => {
     if(m.role === 'user') addUserMsg(m.content);
-    else addNote(`<span class="stamp ia">✦ IA online</span><p>${esc(m.content)}</p>`);
+    else addNote(`<span class="stamp doc">conversa anterior</span><p>${esc(m.content)}</p>`);
   });
 }
 function pushHist(role, content){
