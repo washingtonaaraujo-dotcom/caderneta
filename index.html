@@ -367,6 +367,28 @@ async function saveMemory(text){
   invalidate(); renderDocs();
 }
 
+/* aprendizado automático por padrões: detecta afirmações pessoais/da obra */
+async function autoLearn(q){
+  const s = q.trim();
+  if(s.length < 8 || s.length > 220) return null;
+  if(/[?]$/.test(s)) return null; // pergunta, não fato
+  if(/^(qual|quando|onde|como|quem|que|por|cade|cadê|o que|me |voce|você|tem |existe)/i.test(s)) return null;
+  const padroes = /(meu[s]?\s|minha[s]?\s|eu moro|eu trabalho|eu sou|eu tenho|eu gosto|eu nasci|se chama|chama-se|aniversario|aniversário|da obra é|da empresa é|do trecho é|da equipe é)/i;
+  if(!padroes.test(s)) return null;
+  // evita duplicado: compara com memórias existentes
+  const st = new Set(tokens(s));
+  const chunks = await loadChunks();
+  const dup = chunks.some(c => {
+    if(c.docName !== '💬 Aprendido nas conversas') return false;
+    const ct = new Set(c.tok);
+    let hit = 0; st.forEach(w => { if(ct.has(w)) hit++; });
+    return st.size && hit / st.size > 0.8;
+  });
+  if(dup) return null;
+  await saveMemory(s);
+  return s;
+}
+
 async function ask(){
   const q = $('q').value.trim();
   if(!q) return;
@@ -428,12 +450,18 @@ async function ask(){
   // MODO IA OFFLINE (modelo local no aparelho)
   const localOn = await kvGet('localAIOn');
   if(localOn && 'gpu' in navigator){
-    await answerWithLocalAI();
+    const learned = await autoLearn(q);
+    await answerWithLocalAI(learned);
     return;
   }
 
   // MODO OFFLINE: busca local
   pushHist('user', q);
+  const learnedOff = await autoLearn(q);
+  if(learnedOff){
+    addNote(`<span class="stamp">✎ aprendi sozinha</span><p>${esc(learnedOff)}</p><div class="src">salvo em "💬 Aprendido nas conversas"</div>`);
+    return;
+  }
   if(hits.length){
     let html = `<span class="stamp doc">📄 encontrado nos seus documentos</span>`;
     hits.forEach(h => {
@@ -477,9 +505,10 @@ async function answerWithAI(){
       },
       body: JSON.stringify({
         model:'claude-sonnet-4-6',
-        max_tokens: 1200,
-        system:'Você é a Caderneta, assistente pessoal do Washington, técnico de qualidade em obras rodoviárias no Brasil. Responda sempre em português do Brasil, direto, prático e amigável. Quando receber trechos de documentos do usuário, priorize essas informações e cite o nome do documento. Sem trechos relevantes, use seu conhecimento geral.\n\nIMPORTANTE: responda SOMENTE com um JSON válido, sem markdown, neste formato exato: {"resposta":"sua resposta aqui","aprender":null}\nNo campo "aprender": se o usuário contou um fato novo e duradouro que vale guardar (nome de pessoa, dado da obra, preferência, informação pessoal ou técnica dele), escreva esse fato em uma frase curta na terceira pessoa. Caso contrário, use null. Nunca aprenda perguntas, cumprimentos ou coisas temporárias.',
-        messages: msgs
+        max_tokens: 1500,
+        system:'Você é a Caderneta, assistente pessoal do Washington, técnico de qualidade em obras rodoviárias no Brasil. Responda sempre em português do Brasil, direto, prático e amigável. Quando receber trechos de documentos do usuário, priorize essas informações e cite o nome do documento. Você pode pesquisar na internet quando a pergunta pedir informação atual ou que você não sabe. Sem trechos relevantes, use seu conhecimento geral.\n\nIMPORTANTE: sua mensagem final deve terminar com um JSON válido, sem markdown, neste formato exato: {"resposta":"sua resposta completa aqui","aprender":null}\nNo campo "aprender": se o usuário contou um fato novo e duradouro que vale guardar (nome de pessoa, dado da obra, preferência, informação pessoal ou técnica dele), escreva esse fato em uma frase curta na terceira pessoa. Caso contrário, use null. Nunca aprenda perguntas, cumprimentos ou coisas temporárias.',
+        messages: msgs,
+        tools: [{ type:'web_search_20250305', name:'web_search' }]
       })
     });
     const data = await resp.json();
@@ -488,7 +517,9 @@ async function answerWithAI(){
     let text = raw, learned = null;
     try{
       const clean = raw.replace(/```json|```/g,'').trim();
-      const j = JSON.parse(clean);
+      // pega o último JSON da resposta (a busca na web pode gerar texto antes)
+      const m = clean.lastIndexOf('{"resposta"');
+      const j = JSON.parse(m >= 0 ? clean.slice(m) : clean);
       if(j && j.resposta){ text = j.resposta; learned = j.aprender || null; }
     }catch{ /* se não vier JSON, usa o texto cru mesmo */ }
 
@@ -500,6 +531,7 @@ async function answerWithAI(){
       extra = `<div class="src">✎ aprendi: ${esc(learned)}</div>`;
     }
     note.innerHTML = `<span class="stamp ia">✦ IA online</span><p>${esc(text)}</p>${extra}`;
+    addSaveBtn(note, text);
   }catch(err){
     let extra = '';
     if(lastContext.hits.length){
@@ -511,6 +543,21 @@ async function answerWithAI(){
     note.innerHTML = `<span class="stamp doc">falha na IA</span><p>Não consegui usar o modo online (${esc(err.message)}). Confira a chave e a internet nos Ajustes.</p>${extra}`;
   }
   scrollChat();
+}
+
+/* botão 💾 salvar resposta na caderneta (vira conhecimento offline) */
+function addSaveBtn(note, text){
+  if(!text || text.length < 30) return;
+  const btn = document.createElement('button');
+  btn.className = 'aiBtn';
+  btn.textContent = '💾 Salvar na caderneta';
+  btn.onclick = async () => {
+    const partes = chunkText(text);
+    for(const p of partes) await saveMemory(p);
+    btn.remove();
+    toast('Salvo! Agora sei isso até offline ✓');
+  };
+  note.appendChild(btn);
 }
 
 /* ================= IA OFFLINE (WebLLM — roda no aparelho) ================= */
@@ -532,7 +579,7 @@ async function loadLocalEngine(onProgress){
   } finally { localLoading = false; }
 }
 
-async function answerWithLocalAI(){
+async function answerWithLocalAI(learned){
   const note = addNote(`<span class="stamp ia">🧠 IA offline</span><p class="thinking">preparando o cérebro local…</p>`);
   const p = note.querySelector('p');
   try{
@@ -542,14 +589,14 @@ async function answerWithLocalAI(){
     const temCtx = lastContext.hits.length > 0;
     const ctx = lastContext.hits.map((h,i) => `[${h.c.docName}] ${h.c.text}`).join('\n');
     let sys = 'Você é a Caderneta, assistente pessoal do Washington, técnico de qualidade em obras no Brasil. Responda SEMPRE em português do Brasil, curto e direto.';
-    if(temCtx) sys += ' Use estas anotações do usuário quando forem relevantes:\n' + ctx.slice(0, 2500);
+    if(temCtx) sys += ' Use estas anotações do usuário quando forem relevantes:\n' + ctx.slice(0, 1600);
 
     const msgs = [{ role:'system', content: sys }];
-    chatHist.slice(-6).forEach(m => msgs.push({ role: m.role, content: m.content }));
+    chatHist.slice(-4).forEach(m => msgs.push({ role: m.role, content: m.content }));
     msgs.push({ role:'user', content: lastContext.q });
 
     const stream = await engine.chat.completions.create({
-      messages: msgs, temperature: 0.7, max_tokens: 400, stream: true
+      messages: msgs, temperature: 0.7, max_tokens: 300, stream: true
     });
     let text = '';
     for await (const chunk of stream){
@@ -558,7 +605,9 @@ async function answerWithLocalAI(){
     }
     pushHist('user', lastContext.q);
     pushHist('assistant', text);
-    note.innerHTML = `<span class="stamp ia">🧠 IA offline</span><p>${esc(text)}</p>`;
+    const extra = learned ? `<div class="src">✎ aprendi sozinha: ${esc(learned)}</div>` : '';
+    note.innerHTML = `<span class="stamp ia">🧠 IA offline</span><p>${esc(text)}</p>${extra}`;
+    addSaveBtn(note, text);
   }catch(err){
     let extra = '';
     if(lastContext.hits.length){
@@ -769,6 +818,18 @@ if('serviceWorker' in navigator){
   $('localToggle').checked = !!(await kvGet('localAIOn'));
   const lm = await kvGet('localModel');
   if(lm) $('localModel').value = lm;
+
+  // pré-carrega a IA offline em segundo plano (deixa a 1ª resposta rápida)
+  if((await kvGet('localAIOn')) && 'gpu' in navigator){
+    setTimeout(() => {
+      loadLocalEngine((txt) => { $('localStatus').textContent = '🧠 ' + txt; })
+        .then(() => {
+          $('localStatus').textContent = '✅ IA offline carregada e pronta.';
+          $('netlabel').textContent += ' · 🧠';
+        })
+        .catch(() => {});
+    }, 1200);
+  }
 })();
 </script>
 </body>
