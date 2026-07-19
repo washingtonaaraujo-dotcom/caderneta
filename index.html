@@ -433,6 +433,15 @@ async function ask(){
   const key = await kvGet('apiKey');
   const aiOn = useAI && key && navigator.onLine;
 
+  // autodiagnóstico: se tem internet mas o modo online não vai ser usado, explica o porquê
+  if(!aiOn && navigator.onLine){
+    const motivo = !key ? 'a chave da API não está salva'
+                 : (!useAI ? 'o interruptor "Melhorar respostas com IA" está desligado' : null);
+    if(motivo){
+      addNote(`<span class="stamp doc">⚠ aviso</span><p>Estou com internet, mas ${motivo} — então vou responder do jeito offline. Corrige nos <b>Ajustes</b> e clica em <b>Salvar ajustes</b>.</p>`);
+    }
+  }
+
   // resposta ensinada tem prioridade e é instantânea
   if(best && bs >= 0.45){
     pushHist('user', q);
