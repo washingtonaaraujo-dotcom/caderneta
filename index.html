@@ -185,6 +185,7 @@
       <button class="btn ghost" id="btnSaveKey">Salvar ajustes</button>
 
       <h2 style="margin-top:26px">Backup</h2>
+      <button class="btn ghost" id="btnClearChat">Limpar conversa (mantém o aprendizado)</button>
       <button class="btn ghost" id="btnExport">Exportar tudo (.json)</button>
       <input type="file" id="importInput" accept=".json" style="display:none">
       <button class="btn ghost" id="btnImport">Importar backup</button>
@@ -311,11 +312,60 @@ function esc(s){ const d = document.createElement('div'); d.textContent = s; ret
 
 /* ================= Perguntar ================= */
 let lastContext = null;
+let chatHist = []; // memória da conversa [{role, content}]
+
+async function loadHist(){
+  chatHist = (await kvGet('chatHist')) || [];
+  // reexibe a conversa anterior na tela
+  chatHist.forEach(m => {
+    if(m.role === 'user') addUserMsg(m.content);
+    else addNote(`<span class="stamp ia">✦ IA online</span><p>${esc(m.content)}</p>`);
+  });
+}
+function pushHist(role, content){
+  chatHist.push({ role, content });
+  if(chatHist.length > 20) chatHist = chatHist.slice(-20);
+  kvSet('chatHist', chatHist);
+}
+
+/* memória aprendida nas conversas (vira trecho pesquisável, funciona offline) */
+async function saveMemory(text){
+  let memId = await kvGet('memDocId');
+  const docs = await getAll('docs');
+  let doc = docs.find(d => d.id === memId);
+  if(!doc){
+    memId = await new Promise((res, rej) => {
+      const t = db.transaction('docs','readwrite');
+      const r = t.objectStore('docs').add({ name:'💬 Aprendido nas conversas', chunks:0, date:Date.now() });
+      r.onsuccess = () => res(r.result); t.onerror = () => rej(t.error);
+    });
+    await kvSet('memDocId', memId);
+    doc = { id:memId, name:'💬 Aprendido nas conversas', chunks:0, date:Date.now() };
+  }
+  await tx('chunks','readwrite', s => s.add({
+    docId:memId, docName:'💬 Aprendido nas conversas', idx:doc.chunks, text, tok:tokens(text)
+  }));
+  doc.chunks++;
+  await tx('docs','readwrite', s => s.put(doc));
+  invalidate(); renderDocs();
+}
+
 async function ask(){
   const q = $('q').value.trim();
   if(!q) return;
   $('q').value = '';
   addUserMsg(q);
+
+  // comando direto: "aprende que ..." / "lembra que ..." / "grava que ..."
+  const cmd = q.match(/^(aprende|lembra|grava|anota)( que|:)?\s+(.+)/i);
+  if(cmd){
+    await saveMemory(cmd[3]);
+    pushHist('user', q);
+    pushHist('assistant', 'Anotado na caderneta ✓');
+    addNote(`<span class="stamp">✎ aprendi</span><p>${esc(cmd[3])}</p><div class="src">salvo em "💬 Aprendido nas conversas" — vale até offline</div>`);
+    return;
+  }
+
   const qt = tokens(q);
 
   // 1) respostas ensinadas
@@ -323,7 +373,7 @@ async function ask(){
   let best = null, bs = 0;
   qas.forEach(item => { const s = scoreQA(qt, item); if(s > bs){ bs = s; best = item; } });
 
-  // 2) trechos de documentos
+  // 2) trechos de documentos (inclui memórias de conversa)
   const hits = await searchChunks(qt, 3);
   lastContext = { q, hits };
 
@@ -333,17 +383,20 @@ async function ask(){
 
   // resposta ensinada tem prioridade e é instantânea
   if(best && bs >= 0.45){
+    pushHist('user', q);
+    pushHist('assistant', best.a);
     addNote(`<span class="stamp">✎ ensinado por você</span><p>${esc(best.a)}</p>`);
     return;
   }
 
-  // MODO IA: responde tudo automaticamente (usa os trechos como base quando existem)
+  // MODO IA: responde tudo, lembra da conversa e aprende sozinha
   if(aiOn){
     await answerWithAI();
     return;
   }
 
   // MODO OFFLINE: busca local
+  pushHist('user', q);
   if(hits.length){
     let html = `<span class="stamp doc">📄 encontrado nos seus documentos</span>`;
     hits.forEach(h => {
@@ -351,13 +404,13 @@ async function ask(){
     });
     addNote(html);
   } else {
-    addNote(`<span class="stamp doc">sem registro</span><p>Estou offline e ainda não sei responder isso. Me ensine na aba <b>Ensinar</b> ou alimente um PDF sobre o assunto na <b>Biblioteca</b>.</p>`);
+    addNote(`<span class="stamp doc">sem registro</span><p>Estou offline e ainda não sei responder isso. Me ensine na aba <b>Ensinar</b>, escreva "aprende que ..." ou alimente um PDF na <b>Biblioteca</b>.</p>`);
   }
 }
 $('btnAsk').addEventListener('click', ask);
 $('q').addEventListener('keydown', e => { if(e.key === 'Enter') ask(); });
 
-/* ================= IA online (RAG) ================= */
+/* ================= IA online (RAG + memória + aprendizado) ================= */
 async function answerWithAI(){
   const key = await kvGet('apiKey');
   if(!key || !lastContext) return;
@@ -366,8 +419,16 @@ async function answerWithAI(){
   const ctx = lastContext.hits.map((h,i) =>
     `[Trecho ${i+1} — ${h.c.docName}]\n${h.c.text}`).join('\n\n');
   const userMsg = temCtx
-    ? `Pergunta: ${lastContext.q}\n\nTrechos encontrados nos documentos do usuário (use como base se forem relevantes; cite o documento quando usar):\n\n${ctx}`
-    : `Pergunta: ${lastContext.q}`;
+    ? `${lastContext.q}\n\n---\nTrechos encontrados nos documentos do usuário (use como base se forem relevantes; cite o documento quando usar):\n\n${ctx}`
+    : lastContext.q;
+
+  // monta o histórico da conversa + a mensagem atual
+  const msgs = chatHist
+    .filter(m => m.role === 'user' || m.role === 'assistant')
+    .slice(-10)
+    .map(m => ({ role: m.role, content: m.content }));
+  msgs.push({ role:'user', content: userMsg });
+
   try{
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method:'POST',
@@ -379,15 +440,29 @@ async function answerWithAI(){
       },
       body: JSON.stringify({
         model:'claude-sonnet-4-6',
-        max_tokens: 1024,
-        system:'Você é a Caderneta, assistente pessoal do Washington, técnico de qualidade em obras rodoviárias. Responda sempre em português do Brasil, de forma direta, prática e amigável. Quando receber trechos de documentos do usuário, priorize essas informações e cite o nome do documento. Quando não houver trechos ou eles não forem relevantes, responda normalmente com seu conhecimento geral.',
-        messages:[{ role:'user', content: userMsg }]
+        max_tokens: 1200,
+        system:'Você é a Caderneta, assistente pessoal do Washington, técnico de qualidade em obras rodoviárias no Brasil. Responda sempre em português do Brasil, direto, prático e amigável. Quando receber trechos de documentos do usuário, priorize essas informações e cite o nome do documento. Sem trechos relevantes, use seu conhecimento geral.\n\nIMPORTANTE: responda SOMENTE com um JSON válido, sem markdown, neste formato exato: {"resposta":"sua resposta aqui","aprender":null}\nNo campo "aprender": se o usuário contou um fato novo e duradouro que vale guardar (nome de pessoa, dado da obra, preferência, informação pessoal ou técnica dele), escreva esse fato em uma frase curta na terceira pessoa. Caso contrário, use null. Nunca aprenda perguntas, cumprimentos ou coisas temporárias.',
+        messages: msgs
       })
     });
     const data = await resp.json();
     if(data.error) throw new Error(data.error.message || 'erro na API');
-    const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
-    note.innerHTML = `<span class="stamp ia">✦ IA online</span><p>${esc(text)}</p>`;
+    const raw = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
+    let text = raw, learned = null;
+    try{
+      const clean = raw.replace(/```json|```/g,'').trim();
+      const j = JSON.parse(clean);
+      if(j && j.resposta){ text = j.resposta; learned = j.aprender || null; }
+    }catch{ /* se não vier JSON, usa o texto cru mesmo */ }
+
+    pushHist('user', lastContext.q);
+    pushHist('assistant', text);
+    let extra = '';
+    if(learned){
+      await saveMemory(learned);
+      extra = `<div class="src">✎ aprendi: ${esc(learned)}</div>`;
+    }
+    note.innerHTML = `<span class="stamp ia">✦ IA online</span><p>${esc(text)}</p>${extra}`;
   }catch(err){
     let extra = '';
     if(lastContext.hits.length){
@@ -522,6 +597,12 @@ $('btnSaveKey').addEventListener('click', async () => {
   await kvSet('useAI', $('aiToggle').checked);
   toast('Ajustes salvos');
 });
+$('btnClearChat').addEventListener('click', async () => {
+  chatHist = [];
+  await kvSet('chatHist', []);
+  $('chatlog').innerHTML = '<div class="empty" id="emptyChat"><b>Conversa limpa.</b><br>O que ela aprendeu continua guardado<br>na Biblioteca e na aba Ensinar.</div>';
+  toast('Conversa limpa');
+});
 $('btnExport').addEventListener('click', async () => {
   const data = { qa: await getAll('qa'), docs: await getAll('docs'), chunks: await getAll('chunks') };
   const blob = new Blob([JSON.stringify(data)], { type:'application/json' });
@@ -567,6 +648,7 @@ if('serviceWorker' in navigator){
 (async function init(){
   await openDB();
   netStatus(); renderQA(); renderDocs();
+  await loadHist();
   $('apiKey').value = (await kvGet('apiKey')) || '';
   $('aiToggle').checked = !!(await kvGet('useAI'));
 })();
