@@ -327,29 +327,31 @@ async function ask(){
   const hits = await searchChunks(qt, 3);
   lastContext = { q, hits };
 
-  let answered = false;
+  const useAI = await kvGet('useAI');
+  const key = await kvGet('apiKey');
+  const aiOn = useAI && key && navigator.onLine;
+
+  // resposta ensinada tem prioridade e é instantânea
   if(best && bs >= 0.45){
     addNote(`<span class="stamp">✎ ensinado por você</span><p>${esc(best.a)}</p>`);
-    answered = true;
+    return;
   }
+
+  // MODO IA: responde tudo automaticamente (usa os trechos como base quando existem)
+  if(aiOn){
+    await answerWithAI();
+    return;
+  }
+
+  // MODO OFFLINE: busca local
   if(hits.length){
     let html = `<span class="stamp doc">📄 encontrado nos seus documentos</span>`;
     hits.forEach(h => {
       html += `<p class="trecho">${esc(h.c.text)}</p><div class="src">${esc(h.c.docName)} · trecho ${h.c.idx+1}</div>`;
     });
-    const note = addNote(html);
-    const useAI = await kvGet('useAI');
-    const key = await kvGet('apiKey');
-    if(useAI && key && navigator.onLine){
-      const btn = document.createElement('button');
-      btn.className = 'aiBtn'; btn.textContent = '✦ Redigir resposta com IA';
-      btn.onclick = () => { btn.remove(); answerWithAI(); };
-      note.appendChild(btn);
-    }
-    answered = true;
-  }
-  if(!answered){
-    addNote(`<span class="stamp doc">sem registro</span><p>Ainda não sei responder isso. Me ensine na aba <b>Ensinar</b> ou alimente um PDF sobre o assunto na <b>Biblioteca</b>.</p>`);
+    addNote(html);
+  } else {
+    addNote(`<span class="stamp doc">sem registro</span><p>Estou offline e ainda não sei responder isso. Me ensine na aba <b>Ensinar</b> ou alimente um PDF sobre o assunto na <b>Biblioteca</b>.</p>`);
   }
 }
 $('btnAsk').addEventListener('click', ask);
@@ -359,9 +361,13 @@ $('q').addEventListener('keydown', e => { if(e.key === 'Enter') ask(); });
 async function answerWithAI(){
   const key = await kvGet('apiKey');
   if(!key || !lastContext) return;
-  const note = addNote(`<span class="stamp ia">✦ IA online</span><p class="thinking">redigindo com base nos seus documentos…</p>`);
+  const note = addNote(`<span class="stamp ia">✦ IA online</span><p class="thinking">pensando…</p>`);
+  const temCtx = lastContext.hits.length > 0;
   const ctx = lastContext.hits.map((h,i) =>
     `[Trecho ${i+1} — ${h.c.docName}]\n${h.c.text}`).join('\n\n');
+  const userMsg = temCtx
+    ? `Pergunta: ${lastContext.q}\n\nTrechos encontrados nos documentos do usuário (use como base se forem relevantes; cite o documento quando usar):\n\n${ctx}`
+    : `Pergunta: ${lastContext.q}`;
   try{
     const resp = await fetch('https://api.anthropic.com/v1/messages', {
       method:'POST',
@@ -374,8 +380,8 @@ async function answerWithAI(){
       body: JSON.stringify({
         model:'claude-sonnet-4-6',
         max_tokens: 1024,
-        system:'Você é a Caderneta, assistente pessoal do usuário. Responda em português do Brasil, de forma direta e prática, usando SOMENTE as informações dos trechos fornecidos. Se os trechos não responderem, diga isso claramente.',
-        messages:[{ role:'user', content:`Pergunta: ${lastContext.q}\n\nTrechos dos documentos do usuário:\n\n${ctx}` }]
+        system:'Você é a Caderneta, assistente pessoal do Washington, técnico de qualidade em obras rodoviárias. Responda sempre em português do Brasil, de forma direta, prática e amigável. Quando receber trechos de documentos do usuário, priorize essas informações e cite o nome do documento. Quando não houver trechos ou eles não forem relevantes, responda normalmente com seu conhecimento geral.',
+        messages:[{ role:'user', content: userMsg }]
       })
     });
     const data = await resp.json();
@@ -383,7 +389,14 @@ async function answerWithAI(){
     const text = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n');
     note.innerHTML = `<span class="stamp ia">✦ IA online</span><p>${esc(text)}</p>`;
   }catch(err){
-    note.innerHTML = `<span class="stamp doc">falha na IA</span><p>Não consegui usar o modo online (${esc(err.message)}). A busca offline continua valendo. Confira a chave e a internet nos Ajustes.</p>`;
+    let extra = '';
+    if(lastContext.hits.length){
+      extra = `<div class="src" style="margin-top:10px">Enquanto isso, achei isto nos seus documentos:</div>`;
+      lastContext.hits.forEach(h => {
+        extra += `<p class="trecho">${esc(h.c.text)}</p><div class="src">${esc(h.c.docName)} · trecho ${h.c.idx+1}</div>`;
+      });
+    }
+    note.innerHTML = `<span class="stamp doc">falha na IA</span><p>Não consegui usar o modo online (${esc(err.message)}). Confira a chave e a internet nos Ajustes.</p>${extra}`;
   }
   scrollChat();
 }

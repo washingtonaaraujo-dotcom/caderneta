@@ -1,5 +1,5 @@
 /* Caderneta — service worker (cache-first para funcionar offline) */
-const CACHE = 'caderneta-v1';
+const CACHE = 'caderneta-v2';
 const APP_SHELL = [
   './',
   './index.html',
