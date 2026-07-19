@@ -119,6 +119,19 @@
   .toast{position:fixed; left:50%; bottom:120px; transform:translateX(-50%); background:var(--accent);
     color:var(--accent-ink); font-weight:700; font-size:13px; padding:10px 16px; border-radius:10px; z-index:50; opacity:0; transition:opacity .25s; pointer-events:none}
   .toast.show{opacity:1}
+
+  /* ---------- Visualizador ---------- */
+  #viewer{position:fixed; inset:0; background:rgba(6,16,28,.97); z-index:100; display:none; flex-direction:column}
+  #viewer.open{display:flex}
+  #viewer header{border-bottom:1px solid var(--line)}
+  #viewer .vtitle{font-size:14px; font-weight:700; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap}
+  #viewer .vclose{background:var(--accent); color:var(--accent-ink); border:none; border-radius:8px;
+    padding:8px 14px; font-family:var(--sans); font-weight:800; font-size:13px}
+  #vbody{flex:1; overflow:auto; padding:14px; display:flex; flex-direction:column; align-items:center; gap:12px}
+  #vbody canvas, #vbody img{max-width:100%; border-radius:6px; box-shadow:0 4px 20px rgba(0,0,0,.5); background:#fff}
+  #vbody pre{white-space:pre-wrap; font-family:var(--mono); font-size:13px; color:var(--ink);
+    background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:14px; max-width:100%; width:100%}
+  #vbody .vmsg{color:var(--dim); text-align:center; margin-top:10vh; line-height:1.7}
 </style>
 </head>
 <body>
@@ -231,6 +244,14 @@
   </nav>
 </div>
 <div class="toast" id="toast"></div>
+
+<div id="viewer">
+  <header>
+    <span class="vtitle" id="vtitle">arquivo</span>
+    <button class="vclose" id="vclose">✕ Fechar</button>
+  </header>
+  <div id="vbody"></div>
+</div>
 
 <script>
 /* ================= IndexedDB ================= */
@@ -417,8 +438,12 @@ async function renderFiles(){
       <p class="a">${esc(f.tags || '')}</p>
       <p class="meta">${fmtSize(f.size)} · ${new Date(f.date).toLocaleDateString('pt-BR')}</p>`;
     const bt = document.createElement('div');
+    const bv = document.createElement('button');
+    bv.className = 'aiBtn'; bv.textContent = '👁 Ver';
+    bv.onclick = () => viewFile(f);
+    bt.appendChild(bv);
     const b1 = document.createElement('button');
-    b1.className = 'aiBtn'; b1.textContent = '⬇ Baixar';
+    b1.className = 'aiBtn'; b1.style.marginLeft = '8px'; b1.textContent = '⬇ Baixar';
     b1.onclick = () => downloadFile(f);
     bt.appendChild(b1);
     if(navigator.share){
@@ -448,6 +473,71 @@ async function shareFile(f){
       await navigator.share({ files:[file], title: f.name });
     } else { downloadFile(f); }
   }catch(e){ /* usuário cancelou */ }
+}
+
+/* ================= Visualizador ================= */
+$('vclose').addEventListener('click', () => {
+  $('viewer').classList.remove('open');
+  $('vbody').innerHTML = '';
+});
+async function viewFile(f){
+  const body = $('vbody');
+  $('vtitle').textContent = '📎 ' + f.name;
+  body.innerHTML = '';
+  $('viewer').classList.add('open');
+  const ext = (f.name.split('.').pop() || '').toLowerCase();
+  const tipo = f.type || '';
+  try{
+    if(tipo.startsWith('image/') || ['png','jpg','jpeg','gif','webp','bmp'].includes(ext)){
+      const img = document.createElement('img');
+      img.src = URL.createObjectURL(f.blob);
+      body.appendChild(img);
+    }
+    else if(tipo === 'application/pdf' || ext === 'pdf'){
+      const msg = document.createElement('div');
+      msg.className = 'vmsg'; msg.textContent = 'Abrindo PDF…';
+      body.appendChild(msg);
+      const buf = await f.blob.arrayBuffer();
+      const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+      msg.remove();
+      const maxPag = Math.min(pdf.numPages, 30);
+      const largura = Math.min(body.clientWidth - 28, 900);
+      for(let p = 1; p <= maxPag; p++){
+        const page = await pdf.getPage(p);
+        const vp1 = page.getViewport({ scale: 1 });
+        const scale = largura / vp1.width;
+        const vp = page.getViewport({ scale });
+        const canvas = document.createElement('canvas');
+        canvas.width = vp.width; canvas.height = vp.height;
+        body.appendChild(canvas);
+        await page.render({ canvasContext: canvas.getContext('2d'), viewport: vp }).promise;
+      }
+      if(pdf.numPages > maxPag){
+        const aviso = document.createElement('div');
+        aviso.className = 'vmsg';
+        aviso.textContent = `Mostrando ${maxPag} de ${pdf.numPages} páginas — baixe o arquivo pra ver completo.`;
+        body.appendChild(aviso);
+      }
+    }
+    else if(tipo.startsWith('text/') || ['txt','csv','log','gsi','pnezd','xml','json','md'].includes(ext)){
+      const texto = await f.blob.text();
+      const pre = document.createElement('pre');
+      pre.textContent = texto.slice(0, 200000);
+      body.appendChild(pre);
+    }
+    else{
+      const msg = document.createElement('div');
+      msg.className = 'vmsg';
+      msg.innerHTML = `Esse tipo de arquivo (<b>.${esc(ext)}</b>) o navegador não consegue desenhar na tela — DWG, por exemplo, só abre no AutoCAD.<br><br>Mas posso te entregar:`;
+      body.appendChild(msg);
+      const b = document.createElement('button');
+      b.className = 'btn'; b.style.maxWidth = '300px'; b.textContent = '⬇ Baixar ' + f.name;
+      b.onclick = () => downloadFile(f);
+      body.appendChild(b);
+    }
+  }catch(err){
+    body.innerHTML = `<div class="vmsg">Não consegui abrir esse arquivo (${esc(err.message)}). Tenta baixar.</div>`;
+  }
 }
 $('btnProj').addEventListener('click', () => $('projInput').click());
 $('projInput').addEventListener('change', async (e) => {
@@ -479,8 +569,12 @@ function showFileCards(files, titulo){
     const linha = document.createElement('p');
     linha.innerHTML = `📎 <b>${esc(f.name)}</b> <span class="src" style="display:inline">${fmtSize(f.size)}</span>`;
     note.appendChild(linha);
+    const bv = document.createElement('button');
+    bv.className = 'aiBtn'; bv.textContent = '👁 Ver';
+    bv.onclick = () => viewFile(f);
+    note.appendChild(bv);
     const b1 = document.createElement('button');
-    b1.className = 'aiBtn'; b1.textContent = '⬇ Baixar';
+    b1.className = 'aiBtn'; b1.style.marginLeft = '8px'; b1.textContent = '⬇ Baixar';
     b1.onclick = () => downloadFile(f);
     note.appendChild(b1);
     if(navigator.share){
@@ -512,13 +606,16 @@ async function ask(){
   const qt = tokens(q);
 
   // pedido de arquivo? ("manda o projeto...", "me envia a planilha...")
-  const pedeArquivo = /\b(manda|mande|envia|envie|me da|me dá|abre|abrir|baixa|baixar|preciso do|preciso da|cade|cadê|onde esta|onde está)\b/i.test(q);
+  const pedeArquivo = /\b(manda|mande|envia|envie|me da|me dá|abre|abrir|mostra|mostrar|ver|visualizar|baixa|baixar|preciso do|preciso da|cade|cadê|onde esta|onde está)\b/i.test(q);
   const filesFound = await searchFiles(qt);
   if(filesFound.length && (pedeArquivo || filesFound.length === 1 && qt.length <= 4)){
     pushHist('user', q);
     pushHist('assistant', 'Achei: ' + filesFound.map(f => f.name).join(', '));
-    // ENTREGA DIRETA: pedido claro + 1 arquivo certeiro = baixa na hora
-    if(pedeArquivo && filesFound.length === 1){
+    // ENTREGA DIRETA: pedido claro + 1 arquivo certeiro
+    if(filesFound.length === 1 && /\b(abre|abrir|mostra|mostrar|ver|visualizar)\b/i.test(q)){
+      showFileCards(filesFound, 'abrindo na tela 👁');
+      viewFile(filesFound[0]);
+    } else if(pedeArquivo && filesFound.length === 1){
       downloadFile(filesFound[0]);
       toast('📎 Te mandei o ' + filesFound[0].name);
       showFileCards(filesFound, 'mandei! já está baixando ⬇');
