@@ -165,6 +165,14 @@
       <input type="file" id="fileInput" accept=".pdf,.txt" multiple style="display:none">
       <button class="btn" id="btnPick">Escolher arquivo</button>
       <div id="progress"><div class="bar"><div class="fill" id="pfill"></div></div><div class="txt" id="ptxt"></div></div>
+      <h2 style="margin-top:22px">Projetos e arquivos 📁</h2>
+      <p class="hint">Guarde <b>qualquer arquivo</b> (DWG, PDF de projeto, planilha, foto). Depois é só pedir no chat: <b>"manda o projeto de drenagem"</b> — ela acha e entrega, até offline.</p>
+      <label>Apelido / palavras-chave (opcional, ajuda a achar depois)</label>
+      <input type="text" id="fileTags" placeholder="ex.: projeto drenagem trecho norte estaca 140">
+      <input type="file" id="projInput" multiple style="display:none">
+      <button class="btn ghost" id="btnProj">Guardar arquivo</button>
+      <div id="fileList"></div>
+
       <h2 style="margin-top:22px">Documentos indexados</h2>
       <div id="docList"></div>
     </section>
@@ -229,14 +237,17 @@
 let db;
 function openDB(){
   return new Promise((res, rej) => {
-    const r = indexedDB.open('caderneta-db', 1);
+    const r = indexedDB.open('caderneta-db', 2);
     r.onupgradeneeded = (e) => {
       const d = e.target.result;
-      d.createObjectStore('qa', { keyPath:'id', autoIncrement:true });
-      d.createObjectStore('docs', { keyPath:'id', autoIncrement:true });
-      const c = d.createObjectStore('chunks', { keyPath:'id', autoIncrement:true });
-      c.createIndex('docId', 'docId');
-      d.createObjectStore('kv', { keyPath:'k' });
+      if(!d.objectStoreNames.contains('qa')) d.createObjectStore('qa', { keyPath:'id', autoIncrement:true });
+      if(!d.objectStoreNames.contains('docs')) d.createObjectStore('docs', { keyPath:'id', autoIncrement:true });
+      if(!d.objectStoreNames.contains('chunks')){
+        const c = d.createObjectStore('chunks', { keyPath:'id', autoIncrement:true });
+        c.createIndex('docId', 'docId');
+      }
+      if(!d.objectStoreNames.contains('kv')) d.createObjectStore('kv', { keyPath:'k' });
+      if(!d.objectStoreNames.contains('files')) d.createObjectStore('files', { keyPath:'id', autoIncrement:true });
     };
     r.onsuccess = () => { db = r.result; res(); };
     r.onerror = () => rej(r.error);
@@ -389,6 +400,99 @@ async function autoLearn(q){
   return s;
 }
 
+/* ================= Projetos e arquivos (almoxarifado) ================= */
+function fmtSize(b){
+  if(b > 1048576) return (b/1048576).toFixed(1) + ' MB';
+  if(b > 1024) return Math.round(b/1024) + ' KB';
+  return b + ' B';
+}
+async function renderFiles(){
+  const files = await getAll('files');
+  const el = $('fileList');
+  el.innerHTML = files.length ? '' : '<p class="hint">Nenhum arquivo guardado ainda.</p>';
+  files.reverse().forEach(f => {
+    const d = document.createElement('div');
+    d.className = 'card';
+    d.innerHTML = `<button class="rm">remover</button><p class="q">📎 ${esc(f.name)}</p>
+      <p class="a">${esc(f.tags || '')}</p>
+      <p class="meta">${fmtSize(f.size)} · ${new Date(f.date).toLocaleDateString('pt-BR')}</p>`;
+    const bt = document.createElement('div');
+    const b1 = document.createElement('button');
+    b1.className = 'aiBtn'; b1.textContent = '⬇ Baixar';
+    b1.onclick = () => downloadFile(f);
+    bt.appendChild(b1);
+    if(navigator.share){
+      const b2 = document.createElement('button');
+      b2.className = 'aiBtn'; b2.style.marginLeft = '8px'; b2.textContent = '📤 Compartilhar';
+      b2.onclick = () => shareFile(f);
+      bt.appendChild(b2);
+    }
+    d.appendChild(bt);
+    d.querySelector('.rm').onclick = async () => {
+      await tx('files','readwrite', s => s.delete(f.id));
+      renderFiles(); toast('Arquivo removido');
+    };
+    el.appendChild(d);
+  });
+}
+function downloadFile(f){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(f.blob);
+  a.download = f.name; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+async function shareFile(f){
+  try{
+    const file = new File([f.blob], f.name, { type: f.type || 'application/octet-stream' });
+    if(navigator.canShare && navigator.canShare({ files:[file] })){
+      await navigator.share({ files:[file], title: f.name });
+    } else { downloadFile(f); }
+  }catch(e){ /* usuário cancelou */ }
+}
+$('btnProj').addEventListener('click', () => $('projInput').click());
+$('projInput').addEventListener('change', async (e) => {
+  const tags = $('fileTags').value.trim();
+  for(const f of e.target.files){
+    const blob = new Blob([await f.arrayBuffer()], { type: f.type });
+    await tx('files','readwrite', s => s.add({
+      name: f.name, tags, type: f.type, size: f.size, date: Date.now(),
+      tok: tokens(f.name.replace(/\.[a-z0-9]+$/i,'') + ' ' + tags), blob
+    }));
+  }
+  $('fileTags').value = ''; e.target.value = '';
+  toast('Arquivo guardado ✓'); renderFiles();
+});
+
+/* busca de arquivos pelo chat */
+async function searchFiles(qt){
+  const files = await getAll('files');
+  const scored = files.map(f => {
+    const ft = new Set(f.tok || []);
+    let hit = 0; qt.forEach(w => { if(ft.has(w)) hit++; });
+    return { f, s: qt.length ? hit / Math.min(qt.length, 4) : 0 };
+  }).filter(x => x.s >= 0.4).sort((a,b) => b.s - a.s);
+  return scored.slice(0, 3).map(x => x.f);
+}
+function showFileCards(files, titulo){
+  const note = addNote(`<span class="stamp">📁 ${titulo}</span>`);
+  files.forEach(f => {
+    const linha = document.createElement('p');
+    linha.innerHTML = `📎 <b>${esc(f.name)}</b> <span class="src" style="display:inline">${fmtSize(f.size)}</span>`;
+    note.appendChild(linha);
+    const b1 = document.createElement('button');
+    b1.className = 'aiBtn'; b1.textContent = '⬇ Baixar';
+    b1.onclick = () => downloadFile(f);
+    note.appendChild(b1);
+    if(navigator.share){
+      const b2 = document.createElement('button');
+      b2.className = 'aiBtn'; b2.style.marginLeft = '8px'; b2.textContent = '📤 Compartilhar';
+      b2.onclick = () => shareFile(f);
+      note.appendChild(b2);
+    }
+  });
+  scrollChat();
+}
+
 async function ask(){
   const q = $('q').value.trim();
   if(!q) return;
@@ -406,6 +510,16 @@ async function ask(){
   }
 
   const qt = tokens(q);
+
+  // pedido de arquivo? ("manda o projeto...", "me envia a planilha...")
+  const pedeArquivo = /\b(manda|mande|envia|envie|me da|me dá|abre|abrir|baixar|preciso do|preciso da|cade|cadê|onde esta|onde está)\b/i.test(q);
+  const filesFound = await searchFiles(qt);
+  if(filesFound.length && (pedeArquivo || filesFound.length === 1 && qt.length <= 4)){
+    pushHist('user', q);
+    pushHist('assistant', 'Achei: ' + filesFound.map(f => f.name).join(', '));
+    showFileCards(filesFound, filesFound.length > 1 ? 'achei estes arquivos' : 'achei na caderneta');
+    return;
+  }
 
   // 1) respostas ensinadas
   const qas = await getAll('qa');
@@ -431,15 +545,13 @@ async function ask(){
 
   const useAI = await kvGet('useAI');
   const key = await kvGet('apiKey');
-  const aiOn = useAI && key && navigator.onLine;
+  const aiOn = useAI && key; // não confia no detector de internet: tenta de verdade
 
-  // autodiagnóstico: se tem internet mas o modo online não vai ser usado, explica o porquê
-  if(!aiOn && navigator.onLine){
+  // autodiagnóstico: explica por que o modo online está desativado
+  if(!aiOn){
     const motivo = !key ? 'a chave da API não está salva'
-                 : (!useAI ? 'o interruptor "Melhorar respostas com IA" está desligado' : null);
-    if(motivo){
-      addNote(`<span class="stamp doc">⚠ aviso</span><p>Estou com internet, mas ${motivo} — então vou responder do jeito offline. Corrige nos <b>Ajustes</b> e clica em <b>Salvar ajustes</b>.</p>`);
-    }
+                 : 'o interruptor "Melhorar respostas com IA" está desligado';
+    addNote(`<span class="stamp doc">⚠ aviso</span><p>Modo online desativado: ${motivo}. Corrige nos <b>Ajustes</b> e clica em <b>Salvar ajustes</b>.</p>`);
   }
 
   // resposta ensinada tem prioridade e é instantânea
@@ -542,6 +654,14 @@ async function answerWithAI(){
     note.innerHTML = `<span class="stamp ia">✦ IA online</span><p>${esc(text)}</p>${extra}`;
     addSaveBtn(note, text);
   }catch(err){
+    // sem conexão de verdade? cai automaticamente pro cérebro local
+    const isRede = /fetch|network|failed|load/i.test(err.message || '');
+    const localOn = await kvGet('localAIOn');
+    if(isRede && localOn && 'gpu' in navigator){
+      note.remove();
+      await answerWithLocalAI();
+      return;
+    }
     let extra = '';
     if(lastContext.hits.length){
       extra = `<div class="src" style="margin-top:10px">Enquanto isso, achei isto nos seus documentos:</div>`;
@@ -570,22 +690,24 @@ function addSaveBtn(note, text){
 }
 
 /* ================= IA OFFLINE (WebLLM — roda no aparelho) ================= */
-let localEngine = null, localEngineModel = null, localLoading = false;
+let localEngine = null, localEngineModel = null, localEnginePromise = null;
 
 async function loadLocalEngine(onProgress){
   const model = (await kvGet('localModel')) || 'Qwen2.5-0.5B-Instruct-q4f16_1-MLC';
   if(localEngine && localEngineModel === model) return localEngine;
-  if(localLoading) throw new Error('carregamento já em andamento');
+  if(localEnginePromise) return localEnginePromise; // já carregando: entra na fila e espera
   if(!('gpu' in navigator)) throw new Error('este navegador não tem WebGPU — use o Chrome atualizado');
-  localLoading = true;
-  try{
-    const webllm = await import('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm/+esm');
-    localEngine = await webllm.CreateMLCEngine(model, {
-      initProgressCallback: (p) => { if(onProgress) onProgress(p.text || `${Math.round((p.progress||0)*100)}%`); }
-    });
-    localEngineModel = model;
-    return localEngine;
-  } finally { localLoading = false; }
+  localEnginePromise = (async () => {
+    try{
+      const webllm = await import('https://cdn.jsdelivr.net/npm/@mlc-ai/web-llm/+esm');
+      localEngine = await webllm.CreateMLCEngine(model, {
+        initProgressCallback: (p) => { if(onProgress) onProgress(p.text || `${Math.round((p.progress||0)*100)}%`); }
+      });
+      localEngineModel = model;
+      return localEngine;
+    } finally { localEnginePromise = null; }
+  })();
+  return localEnginePromise;
 }
 
 async function answerWithLocalAI(learned){
@@ -820,7 +942,7 @@ if('serviceWorker' in navigator){
 
 (async function init(){
   await openDB();
-  netStatus(); renderQA(); renderDocs();
+  netStatus(); renderQA(); renderDocs(); renderFiles();
   await loadHist();
   $('apiKey').value = (await kvGet('apiKey')) || '';
   $('aiToggle').checked = !!(await kvGet('useAI'));
