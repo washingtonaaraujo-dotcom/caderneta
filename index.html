@@ -871,7 +871,7 @@ async function loadLocalEngine(onProgress){
   return localEnginePromise;
 }
 
-async function answerWithLocalAI(learned){
+async function answerWithLocalAI(learned, retry){
   const note = addNote(`<span class="stamp ia">🧠 IA offline</span><p class="thinking">preparando o cérebro local…</p>`);
   const p = note.querySelector('p');
   try{
@@ -901,6 +901,12 @@ async function answerWithLocalAI(learned){
     note.innerHTML = `<span class="stamp ia">🧠 IA offline</span><p>${esc(text)}</p>${extra}`;
     addSaveBtn(note, text);
   }catch(err){
+    // motor morreu (aba dormiu / trocou modelo)? renasce e tenta de novo uma vez
+    if(!retry && /disposed|device|instance/i.test(err.message || '')){
+      localEngine = null; localEngineModel = null; localEnginePromise = null;
+      note.remove();
+      return answerWithLocalAI(learned, true);
+    }
     let extra = '';
     if(lastContext.hits.length){
       extra = `<div class="src" style="margin-top:10px">Achei isto nas suas anotações:</div>`;
