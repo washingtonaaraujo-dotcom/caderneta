@@ -186,6 +186,11 @@
       <button class="btn ghost" id="btnProj">Guardar arquivo</button>
       <div id="fileList"></div>
 
+      <h2 style="margin-top:22px">Pasta do PC 🖥️</h2>
+      <p class="hint">Conecte uma pasta do computador (ex.: seus projetos) e ela passa a <b>enxergar os arquivos de lá</b> — busca, abre e entrega pelo chat, sem precisar guardar nada aqui. <b>Só no Chrome do PC.</b></p>
+      <button class="btn ghost" id="btnDir">🔗 Conectar pasta do PC</button>
+      <p class="hint" id="dirStatus"></p>
+
       <h2 style="margin-top:22px">Documentos indexados</h2>
       <div id="docList"></div>
     </section>
@@ -553,6 +558,54 @@ $('projInput').addEventListener('change', async (e) => {
   toast('Arquivo guardado ✓'); renderFiles();
 });
 
+/* ================= Pasta do PC (File System Access) ================= */
+async function ensureDirPerm(h){
+  try{
+    if((await h.queryPermission({ mode:'read' })) === 'granted') return true;
+    return (await h.requestPermission({ mode:'read' })) === 'granted';
+  }catch{ return false; }
+}
+async function walkDir(handle, qt, achados, prof){
+  if(prof > 3 || achados.length >= 8) return;
+  for await (const [nome, h] of handle.entries()){
+    if(achados.length >= 8) return;
+    if(h.kind === 'file'){
+      const ft = new Set(tokens(nome.replace(/\.[a-z0-9]+$/i, '')));
+      let hit = 0; qt.forEach(w => { if(ft.has(w) || norm(nome).includes(w)) hit++; });
+      if(qt.length && hit / Math.min(qt.length, 4) >= 0.4) achados.push(h);
+    } else if(h.kind === 'directory' && !nome.startsWith('.')){
+      await walkDir(h, qt, achados, prof + 1);
+    }
+  }
+}
+async function searchDirFiles(qt){
+  const handle = await kvGet('dirHandle');
+  if(!handle) return [];
+  if(!(await ensureDirPerm(handle))) return [];
+  const achados = [];
+  try{ await walkDir(handle, qt, achados, 0); }catch{}
+  const out = [];
+  for(const h of achados){
+    try{
+      const file = await h.getFile();
+      out.push({ name: file.name, blob: file, type: file.type, size: file.size, doPC: true });
+    }catch{}
+  }
+  return out;
+}
+$('btnDir').addEventListener('click', async () => {
+  if(!window.showDirectoryPicker){
+    $('dirStatus').textContent = '❌ Esse navegador não suporta (funciona no Chrome/Edge do PC).';
+    return;
+  }
+  try{
+    const h = await window.showDirectoryPicker();
+    await kvSet('dirHandle', h);
+    $('dirStatus').textContent = '✅ Pasta conectada: ' + h.name + ' — pede os arquivos pelo chat!';
+    toast('Pasta conectada ✓');
+  }catch{ /* cancelou */ }
+});
+
 /* busca de arquivos pelo chat */
 async function searchFiles(qt){
   const files = await getAll('files');
@@ -567,7 +620,7 @@ function showFileCards(files, titulo){
   const note = addNote(`<span class="stamp">📁 ${titulo}</span>`);
   files.forEach(f => {
     const linha = document.createElement('p');
-    linha.innerHTML = `📎 <b>${esc(f.name)}</b> <span class="src" style="display:inline">${fmtSize(f.size)}</span>`;
+    linha.innerHTML = `📎 <b>${esc(f.name)}</b> <span class="src" style="display:inline">${fmtSize(f.size)}${f.doPC ? ' · 🖥️ pasta do PC' : ''}</span>`;
     note.appendChild(linha);
     const bv = document.createElement('button');
     bv.className = 'aiBtn'; bv.textContent = '👁 Ver';
@@ -657,6 +710,20 @@ async function ask(){
   $('q').value = '';
   addUserMsg(q);
 
+  // hora e data do sistema (instantâneo, offline)
+  if(/\b(que horas|horas sao|horas são|hora agora|hora é)\b/i.test(q)){
+    const h = new Date().toLocaleTimeString('pt-BR', { hour:'2-digit', minute:'2-digit' });
+    pushHist('user', q); pushHist('assistant', 'Agora são ' + h);
+    addNote(`<span class="stamp">⏰ relógio do sistema</span><p>Agora são <b>${h}</b></p>`);
+    return;
+  }
+  if(/\b(que dia|data de hoje|dia é hoje|dia e hoje|qual a data)\b/i.test(q)){
+    const d = new Date().toLocaleDateString('pt-BR', { weekday:'long', day:'numeric', month:'long', year:'numeric' });
+    pushHist('user', q); pushHist('assistant', 'Hoje é ' + d);
+    addNote(`<span class="stamp">📅 calendário do sistema</span><p>Hoje é <b>${d}</b></p>`);
+    return;
+  }
+
   // cadastrar contato: "o whatsapp do João é 11 99999-8888"
   const mCad = q.match(/whats(?:app|zap)?\s+(?:d[oae]|de)\s*([\wÀ-ÿ]+)\s*(?:é|e|eh|:)?\s*([\d\s().+-]{8,})/i);
   if(mCad){
@@ -706,8 +773,12 @@ async function ask(){
   const qt = tokens(q);
 
   // pedido de arquivo? ("manda o projeto...", "me envia a planilha...")
-  const pedeArquivo = /\b(manda|mande|envia|envie|me da|me dá|abre|abrir|mostra|mostrar|ver|visualizar|baixa|baixar|preciso do|preciso da|cade|cadê|onde esta|onde está)\b/i.test(q);
-  const filesFound = await searchFiles(qt);
+  const pedeArquivo = /\b(manda|mande|envia|envie|me da|me dá|abre|abrir|mostra|mostrar|ver|visualizar|baixa|baixar|preciso do|preciso da|cade|cadê|onde esta|onde está|procura|procurar)\b/i.test(q);
+  let filesFound = await searchFiles(qt);
+  if(pedeArquivo && filesFound.length < 3){
+    const doPC = await searchDirFiles(qt);
+    filesFound = filesFound.concat(doPC.filter(d => !filesFound.some(f => f.name === d.name)));
+  }
   if(filesFound.length && (pedeArquivo || filesFound.length === 1 && qt.length <= 4)){
     pushHist('user', q);
     pushHist('assistant', 'Achei: ' + filesFound.map(f => f.name).join(', '));
@@ -1159,6 +1230,8 @@ if('serviceWorker' in navigator){
 (async function init(){
   await openDB();
   netStatus(); renderQA(); renderDocs(); renderFiles();
+  const dh = await kvGet('dirHandle');
+  if(dh) $('dirStatus').textContent = '✅ Pasta conectada: ' + dh.name;
   await loadHist();
   $('apiKey').value = (await kvGet('apiKey')) || '';
   $('aiToggle').checked = !!(await kvGet('useAI'));
