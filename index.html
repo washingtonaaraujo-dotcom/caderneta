@@ -946,10 +946,15 @@ async function answerWithLocalAI(learned, retry){
     addSaveBtn(note, text);
   }catch(err){
     // motor morreu (aba dormiu / trocou modelo)? renasce e tenta de novo uma vez
-    if(!retry && /disposed|device|instance/i.test(err.message || '')){
+    if(!retry && /disposed|instance/i.test(err.message || '')){
       localEngine = null; localEngineModel = null; localEnginePromise = null;
       note.remove();
       return answerWithLocalAI(learned, true);
+    }
+    let msgErr = err.message || 'erro';
+    if(/DEVICE_REMOVED|requestDevice|GPUAdapter|D3D12/i.test(msgErr)){
+      localEngine = null; localEngineModel = null; localEnginePromise = null;
+      msgErr = 'a placa de vídeo travou rodando o modelo 😅. Fecha e abre o navegador pra ela se recuperar — e nos Ajustes troca pro modelo <b>Leve</b>, que esse computador aguenta numa boa';
     }
     let extra = '';
     if(lastContext.hits.length){
@@ -958,7 +963,7 @@ async function answerWithLocalAI(learned, retry){
         extra += `<p class="trecho">${esc(h.c.text)}</p><div class="src">${esc(h.c.docName)}</div>`;
       });
     }
-    note.innerHTML = `<span class="stamp doc">IA offline indisponível</span><p>${esc(err.message)}. Baixe o modelo nos <b>Ajustes</b> (precisa de internet uma vez) ou use a busca local.</p>${extra}`;
+    note.innerHTML = `<span class="stamp doc">IA offline indisponível</span><p>${msgErr}. Enquanto isso, a busca local segue firme:</p>${extra}`;
   }
   scrollChat();
 }
