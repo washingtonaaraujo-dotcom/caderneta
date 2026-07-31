@@ -216,6 +216,9 @@
       <label>Sua chave da API Anthropic</label>
       <input type="password" id="apiKey" placeholder="sk-ant-...">
       <p class="hint">A chave fica salva <b>somente neste aparelho</b>. Sem chave e sem internet, o app continua funcionando 100% offline com a busca local.</p>
+      <label>Temas de estudo automático 📚 (separados por vírgula)</label>
+      <input type="text" id="studyTopics" placeholder="ex.: normas DNIT pavimentação, cotação do dólar, Civil 3D">
+      <p class="hint">Cada dia que você abrir o app com internet, ela <b>estuda um desses temas sozinha</b> na web e guarda o que aprendeu.</p>
       <button class="btn ghost" id="btnSaveKey">Salvar ajustes</button>
 
       <h2 style="margin-top:26px">IA offline (experimental)</h2>
@@ -776,6 +779,59 @@ async function despertar(){
   }
 }
 
+/* ================= Estudo pela internet 🌐📚 ================= */
+async function estudarTema(tema){
+  const key = await kvGet('apiKey');
+  if(!key) return false;
+  const note = addNote(`<span class="stamp">📚 estudando</span><p class="thinking">pesquisando na internet sobre <b>${esc(tema)}</b>…</p>`);
+  try{
+    const resp = await fetch('https://api.anthropic.com/v1/messages', {
+      method:'POST',
+      headers:{
+        'content-type':'application/json',
+        'x-api-key': key,
+        'anthropic-version':'2023-06-01',
+        'anthropic-dangerous-direct-browser-access':'true'
+      },
+      body: JSON.stringify({
+        model:'claude-sonnet-4-6',
+        max_tokens: 900,
+        system:'Você é a Caderneta estudando um tema na internet para saber responder offline depois. Pesquise na web e escreva um resumo didático em português do Brasil: 2 a 3 parágrafos, factual, autocontido, repetindo os termos-chave do tema ao longo do texto (isso ajuda a busca offline). Inclua números e dados atuais quando houver, citando a data. Responda APENAS com o texto do resumo, sem preâmbulo.',
+        messages:[{ role:'user', content:'Tema: ' + tema }],
+        tools:[{ type:'web_search_20250305', name:'web_search' }]
+      })
+    });
+    const data = await resp.json();
+    if(data.error) throw new Error(data.error.message);
+    const texto = (data.content || []).filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
+    if(!texto) throw new Error('resposta vazia');
+    const hoje = new Date().toLocaleDateString('pt-BR');
+    const partes = chunkText(`Sobre ${tema} (estudado em ${hoje}): ${texto}`);
+    for(const p of partes) await saveMemory(p);
+    note.innerHTML = `<span class="stamp">📚 estudei na internet</span><p><b>${esc(tema)}</b></p><p>${esc(texto.slice(0, 500))}${texto.length > 500 ? '…' : ''}</p><div class="src">guardado na memória — agora sei isso até offline</div>`;
+    falar('Terminei de estudar sobre ' + tema);
+    if(document.hidden) notifica('Caderneta 📚', 'Estudei sobre ' + tema + ' e guardei na memória!');
+    scrollChat();
+    return true;
+  }catch(err){
+    note.innerHTML = `<span class="stamp doc">falha no estudo</span><p>Não consegui estudar agora (${esc(err.message)}). Tento de novo depois.</p>`;
+    scrollChat();
+    return false;
+  }
+}
+
+async function estudoDiario(){
+  const topics = ((await kvGet('studyTopics')) || '').split(',').map(t => t.trim()).filter(Boolean);
+  if(!topics.length) return;
+  const hoje = new Date().toDateString();
+  if((await kvGet('lastAutoStudy')) === hoje) return; // um estudo por dia
+  const key = await kvGet('apiKey');
+  if(!key) return;
+  await kvSet('lastAutoStudy', hoje);
+  const tema = topics[Math.floor(Math.random() * topics.length)];
+  estudarTema(tema);
+}
+
 async function ask(){
   const q = $('q').value.trim();
   if(!q) return;
@@ -871,6 +927,20 @@ async function ask(){
       falar('Abrindo ' + nome);
       return;
     }
+  }
+
+  // comando: "estuda sobre X" / "aprende sobre X" — pesquisa na web e memoriza
+  const mEstuda = q.match(/^(?:estuda|estudar|estude|aprende sobre|aprenda sobre|pesquisa e aprende)\s+(?:sobre\s+|o\s+|a\s+)?(.+)/i);
+  if(mEstuda && !/^que\b/i.test(mEstuda[1])){
+    pushHist('user', q);
+    const key = await kvGet('apiKey');
+    if(!key){
+      await addPending('Me explique sobre: ' + mEstuda[1]);
+      addNote(`<span class="stamp doc">📚 anotado</span><p>Sem a chave da API agora — anotei <b>${esc(mEstuda[1])}</b> no caderno de estudos pra quando der.</p>`);
+    } else {
+      await estudarTema(mEstuda[1]);
+    }
+    return;
   }
 
   // comando direto: "aprende que ..." / "lembra que ..." / "grava que ..."
@@ -1392,6 +1462,7 @@ async function renderDocs(){
 $('btnSaveKey').addEventListener('click', async () => {
   await kvSet('apiKey', $('apiKey').value.trim());
   await kvSet('useAI', $('aiToggle').checked);
+  await kvSet('studyTopics', $('studyTopics').value.trim());
   toast('Ajustes salvos');
 });
 $('btnClearChat').addEventListener('click', async () => {
@@ -1471,8 +1542,12 @@ if('serviceWorker' in navigator){
     }, 1200);
   }
 
+  $('studyTopics').value = (await kvGet('studyTopics')) || '';
+
   // estuda as dúvidas anotadas quando tiver internet
   setTimeout(studyPendings, 3000);
+  // estudo diário dos temas de interesse
+  setTimeout(estudoDiario, 6000);
 })();
 </script>
 </body>
