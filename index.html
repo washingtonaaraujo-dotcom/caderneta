@@ -1421,7 +1421,15 @@ async function ingestFile(file){
   });
   fill.style.width = '100%';
   ptxt.textContent = `${file.name}: ${chunks.length} trechos indexados ✓`;
-  invalidate(); renderDocs();
+  // guarda também o ARQUIVO ORIGINAL pra poder visualizar depois (👁)
+  const jaTem = (await getAll('files')).some(f => f.name === file.name && f.size === file.size);
+  if(!jaTem){
+    await tx('files','readwrite', s => s.add({
+      name: file.name, tags: 'documento da biblioteca', type: file.type, size: file.size,
+      date: Date.now(), tok: tokens(file.name.replace(/\.[a-z0-9]+$/i,'')), blob: file
+    }));
+  }
+  invalidate(); renderDocs(); renderFiles();
   setTimeout(() => prog.style.display = 'none', 2500);
 }
 $('btnPick').addEventListener('click', () => $('fileInput').click());
@@ -1441,6 +1449,16 @@ async function renderDocs(){
     d.className = 'card';
     d.innerHTML = `<button class="rm">remover</button><p class="q">${esc(doc.name)}</p>
       <p class="meta">${doc.chunks} trechos · ${new Date(doc.date).toLocaleDateString('pt-BR')}</p>`;
+    if(doc.name !== '💬 Aprendido nas conversas'){
+      const bv = document.createElement('button');
+      bv.className = 'aiBtn'; bv.textContent = '👁 Ver original';
+      bv.onclick = async () => {
+        const arq = (await getAll('files')).find(f => f.name === doc.name);
+        if(arq) viewFile(arq);
+        else toast('Original não guardado — indexa o arquivo de novo que agora eu guardo!');
+      };
+      d.appendChild(bv);
+    }
     d.querySelector('.rm').onclick = async () => {
       await new Promise((res) => {
         const t = db.transaction('chunks','readwrite');
