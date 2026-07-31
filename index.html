@@ -194,6 +194,11 @@
       <button class="btn ghost" id="btnDir">🔗 Conectar pasta do PC</button>
       <p class="hint" id="dirStatus"></p>
 
+      <h2 style="margin-top:22px">Memórias aprendidas 🧠</h2>
+      <p class="hint">Tudo que ela aprendeu sozinha ou por comando. Apague o que estiver errado ou não servir mais.</p>
+      <div id="memList"></div>
+      <button class="btn danger" id="btnWipeMems" style="margin-top:4px">Apagar todas as memórias</button>
+
       <h2 style="margin-top:22px">Documentos indexados</h2>
       <div id="docList"></div>
     </section>
@@ -1227,6 +1232,47 @@ $('aliveToggle').addEventListener('change', async (e) => {
   } else toast('Modo viva desligado');
 });
 
+/* ================= Memórias aprendidas (gerenciar) ================= */
+async function renderMems(){
+  const el = $('memList');
+  if(!el) return;
+  const chunks = await loadChunks();
+  const mems = chunks.filter(c => c.docName === '💬 Aprendido nas conversas');
+  el.innerHTML = mems.length ? '' : '<p class="hint">Nada aprendido em conversas ainda.</p>';
+  $('btnWipeMems').style.display = mems.length ? 'block' : 'none';
+  mems.slice().reverse().forEach(m => {
+    const d = document.createElement('div');
+    d.className = 'card';
+    d.innerHTML = `<button class="rm">remover</button><p class="a" style="color:var(--ink)">${esc(m.text)}</p>`;
+    d.querySelector('.rm').onclick = async () => {
+      await tx('chunks','readwrite', s => s.delete(m.id));
+      const memId = await kvGet('memDocId');
+      const docs = await getAll('docs');
+      const doc = docs.find(x => x.id === memId);
+      if(doc){ doc.chunks = Math.max(0, doc.chunks - 1); await tx('docs','readwrite', s => s.put(doc)); }
+      invalidate(); renderMems(); renderDocs();
+      toast('Memória apagada — esqueci isso!');
+    };
+    el.appendChild(d);
+  });
+}
+$('btnWipeMems').addEventListener('click', async () => {
+  if(!confirm('Apagar TODAS as memórias aprendidas? Ela vai esquecer tudo isso.')) return;
+  const chunks = await loadChunks();
+  const mems = chunks.filter(c => c.docName === '💬 Aprendido nas conversas');
+  await new Promise((res) => {
+    const t = db.transaction('chunks','readwrite');
+    mems.forEach(m => t.objectStore('chunks').delete(m.id));
+    t.oncomplete = res;
+  });
+  const memId = await kvGet('memDocId');
+  const docs = await getAll('docs');
+  const doc = docs.find(x => x.id === memId);
+  if(doc){ doc.chunks = 0; await tx('docs','readwrite', s => s.put(doc)); }
+  invalidate(); renderMems(); renderDocs();
+  toast('Memórias zeradas');
+});
+
 /* ================= Ensinar ================= */
 async function renderQA(){
   const list = await getAll('qa');
@@ -1398,7 +1444,7 @@ if('serviceWorker' in navigator){
 
 (async function init(){
   await openDB();
-  netStatus(); renderQA(); renderDocs(); renderFiles();
+  netStatus(); renderQA(); renderDocs(); renderFiles(); renderMems();
   const dh = await kvGet('dirHandle');
   if(dh) $('dirStatus').textContent = '✅ Pasta conectada: ' + dh.name;
   await loadHist();
