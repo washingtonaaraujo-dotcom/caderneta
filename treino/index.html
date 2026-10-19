@@ -69,6 +69,8 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 .load input{width:72px;height:44px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--fg);font:700 18px var(--display);text-align:center;font-variant-numeric:tabular-nums}
 .load span{font-size:13px;color:var(--muted)}
 .prev{font-size:12px;color:var(--muted)}
+.vid{margin-left:auto;font:600 14px var(--body);color:var(--tc);text-decoration:none;border:1px solid var(--line);border-radius:8px;padding:8px 12px;background:var(--bg)}
+.vid:focus-visible{outline:2px solid var(--tc);outline-offset:2px}
 .finish{width:100%;padding:14px;border-radius:12px;border:0;background:var(--tc);color:var(--bg);font:800 20px var(--display);text-transform:uppercase;letter-spacing:.04em;cursor:pointer}
 .note{font-size:13px;color:var(--muted);text-align:center}
 .timer{position:fixed;left:0;right:0;bottom:0;background:var(--fg);color:var(--bg);padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-top:10px;padding-bottom:calc(10px + env(safe-area-inset-bottom,0px));z-index:20}
@@ -162,17 +164,17 @@ button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid 
 const TREINOS=[
  {id:1,dia:"Segunda",foco:"Superiores",cor:"--t1",ex:[
   {n:"Flexão de braços",g:"Peito",bw:1},{n:"Crucifixo",g:"Peito"},{n:"Supino com halteres",g:"Peito"},
-  {n:"Tríceps testa",g:"Tríceps"},{n:"Tríceps com corda",g:"Tríceps"},{n:"Remada",g:"Costas"},
-  {n:"Pulley frente com estribo",g:"Costas"},{n:"Rosca na polia baixa",g:"Bíceps"},
-  {n:"Desenvolvimento",g:"Ombros"},{n:"Elevação lateral",g:"Ombros"},{n:"Abdominal no solo",g:"Abdômen",bw:1}]},
+  {n:"Tríceps testa",g:"Tríceps"},{n:"Tríceps com corda",g:"Tríceps"},{n:"Remada",g:"Costas",q:"remada sentada"},
+  {n:"Pulley frente com estribo",g:"Costas",q:"puxada frente com triângulo"},{n:"Rosca na polia baixa",g:"Bíceps",q:"rosca direta na polia baixa"},
+  {n:"Desenvolvimento",g:"Ombros",q:"desenvolvimento de ombro"},{n:"Elevação lateral",g:"Ombros",q:"elevação lateral com halteres"},{n:"Abdominal no solo",g:"Abdômen",bw:1}]},
  {id:2,dia:"Terça",foco:"Inferiores",cor:"--t2",ex:[
   {n:"Agachamento",g:"Pernas"},{n:"Leg press 180°",g:"Pernas"},{n:"Cadeira extensora",g:"Pernas"},
   {n:"Cadeira flexora",g:"Pernas"},{n:"Adutor",g:"Quadril"},{n:"Abdutor",g:"Quadril"},
   {n:"Panturrilha sentado",g:"Pernas"},{n:"Abdominal infra",g:"Abdômen",bw:1},{n:"Abdominal oblíquo",g:"Abdômen",bw:1}]},
  {id:3,dia:"Quarta",foco:"Corpo todo",cor:"--t3",ex:[
-  {n:"Prancha",g:"Abdômen",tempo:1},{n:"Abdominal dupla",g:"Abdômen",bw:1},{n:"Flexão de braços",g:"Peito",bw:1},
-  {n:"Tríceps com corda",g:"Tríceps"},{n:"Pulley frente com estribo",g:"Costas"},{n:"Remada",g:"Costas"},
-  {n:"Desenvolvimento",g:"Ombros"},{n:"Leg press 180°",g:"Pernas"},{n:"Cadeira extensora",g:"Pernas"},
+  {n:"Prancha",g:"Abdômen",tempo:1},{n:"Abdominal dupla",g:"Abdômen",bw:1,q:"abdominal remador"},{n:"Flexão de braços",g:"Peito",bw:1},
+  {n:"Tríceps com corda",g:"Tríceps"},{n:"Pulley frente com estribo",g:"Costas",q:"puxada frente com triângulo"},{n:"Remada",g:"Costas",q:"remada sentada"},
+  {n:"Desenvolvimento",g:"Ombros",q:"desenvolvimento de ombro"},{n:"Leg press 180°",g:"Pernas"},{n:"Cadeira extensora",g:"Pernas"},
   {n:"Cadeira flexora",g:"Pernas"},{n:"Abdominal no solo",g:"Abdômen",bw:1}]}
 ];
 const FASES=[
@@ -238,7 +240,7 @@ function renderList(){
         <div><div class="ex-name">${e.n}${bi}</div>
         <div class="ex-meta">${e.g} · ${e.tempo?"3 × 30 segundos":e.bw?"peso do corpo":f.sets.join(" / ")+" repetições"}</div></div>
         <div class="row">${reps.map((r,j)=>`<button class="set${st[j]?" on":""}" data-i="${i}" data-j="${j}" aria-pressed="${!!st[j]}" aria-label="Série ${j+1}">${r}</button>`).join("")}${load}</div>
-        ${lw!=null&&!e.bw?`<div class="prev">Última vez: ${lw} kg</div>`:""}
+        <div class="row">${lw!=null&&!e.bw?`<span class="prev">Última vez: ${lw} kg</span>`:""}<a class="vid" href="https://www.youtube.com/results?search_query=${encodeURIComponent((e.q||e.n)+" execução correta")}" target="_blank" rel="noopener">▶ Ver como fazer</a></div>
       </div></article>`;
   }).join("");
 }
